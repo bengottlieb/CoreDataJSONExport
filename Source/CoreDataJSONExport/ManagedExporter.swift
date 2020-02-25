@@ -8,6 +8,7 @@
 
 import CoreData
 import ZIPFoundation
+import Suite
 
 public class ManagedExporter {
 	let records: [NSManagedObject]
