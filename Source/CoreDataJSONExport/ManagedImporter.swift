@@ -14,28 +14,33 @@ public class ManagedImporter {
 	let context: NSManagedObjectContext
 	
 	var importedRecords: [String: NSManagedObjectID] = [:]
-	init(context: NSManagedObjectContext) {
+	public init(context: NSManagedObjectContext) {
 		self.context = context
 	}
 	
-	public func `import`(from url: URL, checkingForDuplicates: Bool = false) throws {
-		if url.pathExtension == "zip" {
-			let dest = url.deletingLastPathComponent().appendingPathComponent(url.deletingPathExtension().lastPathComponent + "_unzipped")
-			try FileManager.default.unzipItem(at: url, to: dest)
-			try self.importJSON(from: dest.appendingPathComponent(ManagedExporter.jsonFilename), checkingForDuplicates: checkingForDuplicates)
-			try? FileManager.default.removeItem(at: dest)
+	@discardableResult
+	public func `import`(from url: URL, checkingForDuplicates: Bool = false) throws -> [NSManagedObjectID] {
+		if FileManager.default.directoryExists(at: url) {
+			return try self.importJSON(from: url.appendingPathComponent(ManagedExporter.jsonFilename), checkingForDuplicates: checkingForDuplicates)
 		} else {
-			try self.importJSON(from: url.appendingPathComponent(ManagedExporter.jsonFilename), checkingForDuplicates: checkingForDuplicates)
+			let dest = FileManager.tempDirectory.appendingPathComponent("Unzipped Import")
+			try? FileManager.default.removeItem(at: dest)
+			try FileManager.default.unzipItem(at: url, to: dest)
+			let result = try self.importJSON(from: dest.appendingPathComponent(ManagedExporter.jsonFilename), checkingForDuplicates: checkingForDuplicates)
+			try? FileManager.default.removeItem(at: dest)
+			return result
 		}
 	}
 
-	func importJSON(from url: URL, checkingForDuplicates: Bool = false) throws {
+	@discardableResult
+	func importJSON(from url: URL, checkingForDuplicates: Bool = false) throws -> [NSManagedObjectID] {
 		guard FileManager.default.fileExists(at: url) else { throw ImportError.noJSONFileFound }
 		let data = try Data(contentsOf: url)
 		guard let json = try JSONSerialization.jsonObject(with: data, options: []) as? [String: Any] else { throw ImportError.improperJSONFormatting }
 		guard let entityList = json[ManagedExporter.entityNameListKey] as? [String] else { throw ImportError.missingEntityList }
 		var pendingLinks: [PendingRelationship] = []
-		let parent = url.deletingLastPathComponent()
+		var imported: [NSManagedObjectID] = []
+		let attachmentsDirectory = url.deletingLastPathComponent().appendingPathComponent(ManagedExporter.attachmentsDirectoryName)
 		
 		for entityName in entityList {
 			guard let recordDicts = json[entityName] as? [[String: Any]] else { continue }
@@ -44,9 +49,10 @@ public class ManagedImporter {
 			for recordDict in recordDicts {
 				let newObject = self.context.insertEntity(named: entityName)
 				do {
-					let result = try newObject.import(from: recordDict, basedAt: parent)
+					let result = try newObject.import(from: recordDict, basedAt: attachmentsDirectory)
 					if !result.relationships.isEmpty { pendingLinks += result.relationships }
 					self.importedRecords[result.original] = result.objectID
+					imported.append(result.objectID)
 				} catch {
 					print("Error importing object: \(error)")
 				}
@@ -61,6 +67,7 @@ public class ManagedImporter {
 		}
 		
 		try self.context.save()
+		return imported
 	}
 	
 	struct PendingRelationship {

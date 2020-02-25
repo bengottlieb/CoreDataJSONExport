@@ -16,17 +16,36 @@ public class ManagedExporter {
 	let context: NSManagedObjectContext!
 	let entities: [NSEntityDescription]
 	static let jsonFilename = "records.json"
+	static let attachmentsDirectoryName = "attachments"
 	static let entityNameListKey = "entity_names"
-
-	public func export(to url: URL) throws {
+	
+	public struct ExcludedFields {
+		public var allEntities: [String] = []
+		public var entityExclusions: [String: [String]] = [:]
+		
+		func excluded(for entity: String) -> [String] {
+			return allEntities + (entityExclusions[entity] ?? [])
+		}
+		
+		public init(_ base: [String]) {
+			self.allEntities = base
+		}
+		
+		public init() { }
+	}
+	
+	public func export(to url: URL, excluding: ExcludedFields = ExcludedFields()) throws {
+		try? FileManager.default.removeItem(at: url)
 		try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true, attributes: nil)
 		var dict: [String: Any] = [:]
+		let attachmentsURL = url.appendingPathComponent(ManagedExporter.attachmentsDirectoryName)
+		try? FileManager.default.createDirectory(at: attachmentsURL, withIntermediateDirectories: true, attributes: nil)
 		
 		for entity in self.entities {
 			guard let name = entity.name else { continue }
 			var entityRecords: [[String: Any]] = []
 			for record in try self.records(for: entity) {
-				try entityRecords.append(record.exportAsDictionary(to: url))
+				try entityRecords.append(record.exportAsDictionary(to: attachmentsURL, excluding: excluding.excluded(for: name)))
 			}
 			dict[name] = entityRecords
 		}
@@ -36,12 +55,11 @@ public class ManagedExporter {
 		try json.write(to: url.appendingPathComponent(ManagedExporter.jsonFilename))
 	}
 	
-	public func export(toZip url: URL) throws {
+	public func export(toZip url: URL, excluding: ExcludedFields = ExcludedFields()) throws {
 		let tempURL = FileManager.tempDirectory.appendingPathComponent(UUID().uuidString)
 		defer { try? FileManager.default.removeItem(at: tempURL) }
-		try self.export(to: tempURL)
+		try self.export(to: tempURL, excluding: excluding)
 		try FileManager.default.zipItem(at: tempURL, to: url, shouldKeepParent: false, compressionMethod: .deflate, progress: nil)
-		
 	}
 	
 	public init?(request: NSFetchRequest<NSManagedObject>? = nil, in context: NSManagedObjectContext) {
@@ -92,23 +110,23 @@ extension NSManagedObject {
 	}()
 	static let jsonObjectIDKey = "_object_id_"
 	
-	func exportAsDictionary(to url: URL, dataSizeLimit: Int = 0) throws -> [String: Any] {
-		var dict = try self.recordPropertiesAsDictionary(dataSizeLimit: dataSizeLimit, storingDataAt: url)
+	func exportAsDictionary(to url: URL, dataSizeLimit: Int = 0, excluding: [String]) throws -> [String: Any] {
+		var dict = try self.recordPropertiesAsDictionary(dataSizeLimit: dataSizeLimit, storingDataAt: url, excluding: excluding)
 		
 		for (name, relationship) in self.entity.relationshipsByName {
-			guard !relationship.isToMany, let target = self.value(forKey: name) as? NSManagedObject, let destName = relationship.destinationEntity?.name else { continue }
+			guard !excluding.contains(name), !relationship.isToMany, let target = self.value(forKey: name) as? NSManagedObject, let destName = relationship.destinationEntity?.name else { continue }
 			dict[name] = ["record_id": target.objectID.uriRepresentation().absoluteString, "entity": destName]
 		}
 		return dict
 	}
 	
-	func recordPropertiesAsDictionary(dataSizeLimit: Int? = 0, storingDataAt url: URL?) throws -> [String: Any] {
+	func recordPropertiesAsDictionary(dataSizeLimit: Int? = 0, storingDataAt url: URL?, excluding: [String]) throws -> [String: Any] {
 		var dict: [String: Any] = [:]
 		
 		dict[NSManagedObject.jsonObjectIDKey] = self.objectID.uriRepresentation().absoluteString
 		
 		for (name, attr) in self.entity.attributesByName {
-			guard let value = self.value(forKey: name) else { continue }
+			guard !excluding.contains(name), let value = self.value(forKey: name) else { continue }
 			switch attr.attributeType {
 			case .booleanAttributeType:
 				dict[name] = value as? Bool ?? false
