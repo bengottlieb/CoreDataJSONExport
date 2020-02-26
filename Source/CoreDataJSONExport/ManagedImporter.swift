@@ -19,7 +19,7 @@ public class ManagedImporter {
 	}
 	
 	@discardableResult
-	public func `import`(from url: URL, checkingForDuplicates: Bool = false) throws -> [NSManagedObjectID] {
+	public func `import`(from url: URL, checkingForDuplicates: Bool = false) throws -> [NSManagedObject] {
 		if FileManager.default.directoryExists(at: url) {
 			return try self.importJSON(from: url.appendingPathComponent(ManagedExporter.jsonFilename), checkingForDuplicates: checkingForDuplicates)
 		} else {
@@ -33,13 +33,13 @@ public class ManagedImporter {
 	}
 
 	@discardableResult
-	func importJSON(from url: URL, checkingForDuplicates: Bool = false) throws -> [NSManagedObjectID] {
+	func importJSON(from url: URL, checkingForDuplicates: Bool = false) throws -> [NSManagedObject] {
 		guard FileManager.default.fileExists(at: url) else { throw ImportError.noJSONFileFound }
 		let data = try Data(contentsOf: url)
 		guard let json = try JSONSerialization.jsonObject(with: data, options: []) as? [String: Any] else { throw ImportError.improperJSONFormatting }
 		guard let entityList = json[ManagedExporter.entityNameListKey] as? [String] else { throw ImportError.missingEntityList }
 		var pendingLinks: [PendingRelationship] = []
-		var imported: [NSManagedObjectID] = []
+		var imported: [NSManagedObject] = []
 		let attachmentsDirectory = url.deletingLastPathComponent().appendingPathComponent(ManagedExporter.attachmentsDirectoryName)
 		
 		for entityName in entityList {
@@ -52,7 +52,7 @@ public class ManagedImporter {
 					let result = try newObject.import(from: recordDict, basedAt: attachmentsDirectory)
 					if !result.relationships.isEmpty { pendingLinks += result.relationships }
 					self.importedRecords[result.original] = result.objectID
-					imported.append(result.objectID)
+					imported.append(newObject)
 				} catch {
 					print("Error importing object: \(error)")
 				}
